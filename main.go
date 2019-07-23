@@ -5,6 +5,6 @@ import (
 )
 
 func main() {
-	server := chatroom.NewChatServer("127.0.0.1", 6666)
+	server := chatroom.NewChatServer("0.0.0.0", 6666)
 	server.StartListen()
 }

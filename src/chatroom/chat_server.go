@@ -10,7 +10,12 @@ const (
 	PING_MSG   = "receive connection from "
 )
 
-var dataLib map[string]string
+type userLib struct {
+	pwd	string
+	pts int
+}
+
+var dataLib map[string]userLib
 var activePort []net.Conn
 var activePortNum int
 
@@ -32,7 +37,7 @@ func (server ChatServer) StartListen() {
 	listener, err := net.Listen(LISTEN_TCP, server.listenAddr)
 	server.listener = listener
 
-	dataLib = make(map[string]string)
+	dataLib = make(map[string]userLib)
 	activePort = make([]net.Conn, 30000)
 	activePortNum = 0
 
@@ -55,7 +60,7 @@ func (server ChatServer) StartListen() {
 	}
 }
 
-func checkifLogin(msg string) (bool) {
+func checkifLoginRequest(msg string) (bool) {
 	if len(msg) < 15 {
 		return false
 	}
@@ -99,23 +104,64 @@ func checkifChange(msg string) (bool) {
 	}
 }
 
+func checkifUnlog(msg string) (bool) {
+	if len(msg) < 8 {
+		return false
+	}
+	if msg[0:8] == "~@Unlog#" {
+		return true
+	} else {
+		return false
+	}
+}
+
+func checkifLogin(msg string) (bool) {
+	if len(msg) < 8 {
+		return false
+	}
+	if msg[0:8] == "~@Login#" {
+		return true
+	} else {
+		return false
+	}
+}
+
+func getLevel(pts int) (string) {
+	if pts < 5 {
+		return "Level 1"
+	}
+	if pts < 20 {
+		return "Level 2"
+	}
+	if pts < 50 {
+		return "Level 3"
+	}
+	if pts < 100 {
+		return "Level 4"
+	}
+	if pts < 200 {
+		return "Level 5"
+	}
+	if pts < 500 {
+		return "Level 6"
+	}
+	if pts < 1000 {
+		return "Level 7"
+	}
+	if pts < 2000 {
+		return "Level 8"
+	}
+	if pts < 5000 {
+		return "Level 9"
+	}
+	return "Level 10"
+}
+
 func (server ChatServer) userHandler(client net.Conn) {
 	buffer := make([]byte, 1024)
 	clientAddr := client.RemoteAddr()
 	clientType := -1
 	PrintClientMsg(PING_MSG + clientAddr.String())
-
-	found := false
-	for i := 0; i < activePortNum; i++ {
-		if activePort[i] == client {
-			found = true
-			break
-		}
-	}
-	if found == false {
-		activePort[activePortNum] = client
-		activePortNum ++
-	}
 
 	var msg string
 	for {
@@ -138,27 +184,84 @@ func (server ChatServer) userHandler(client net.Conn) {
 
 			if clientType == -1 {
 				// check type
-				if checkifLogin(msg) {
+				if checkifLoginRequest(msg) {
 					clientType = 2
 				} else {
 					if checkifRegister(msg) {
 						clientType = 3
 					} else {
 						if checkifChange(msg) {
-							clientType = 4;
+							clientType = 4
 						} else {
 							clientType = 1
+
+							found := false
+							for i := 0; i < activePortNum; i++ {
+								if activePort[i] == client {
+									found = true
+									break
+								}
+							}
+							if found == false {
+								activePort[activePortNum] = client
+								activePortNum ++
+							}
 						}
 					}
 				}
 			}
 
 			if clientType == 1 {
-				// normal user, send message.
-				toPrint := []byte(msg)
-				for i := 0; i < activePortNum; i++ {
-					if activePort[i] != client {
-						activePort[i].Write(toPrint)
+				if checkifUnlog(msg) {
+					msg = msg[8:]
+					if msg != "Tourist" {
+						toPrint := []byte("<" + msg + "> log out.")
+						for i := 0; i < activePortNum; i++ {
+							if activePort[i] != client {
+								activePort[i].Write(toPrint)
+							}
+						}
+					}
+				} else if checkifLogin(msg) {
+					msg = msg[8:]
+					if msg != "Tourist" {
+						toPrint := []byte("<" + msg + "> log in.")
+						for i := 0; i < activePortNum; i++ {
+							if activePort[i] != client {
+								activePort[i].Write(toPrint)
+							} else {
+								usrData := dataLib[msg]
+								activePort[i].Write([]byte("~@" + getLevel(usrData.pts) + ", Coins: " + strconv.Itoa(usrData.pts)))
+							}
+						}
+					}
+				} else {
+					i := 0
+					for ; i < len(msg); i++ {
+						if msg[i] == '#' {
+							break
+						}
+					}
+					usrName := msg[0:i]
+					if usrName == "Tourist" {
+						toPrint := []byte("Tourist: " + msg[i+1:])
+						for i := 0; i < activePortNum; i++ {
+							if activePort[i] != client {
+								activePort[i].Write(toPrint)
+							}
+						}
+					} else {
+						usrData := dataLib[usrName]
+						usrData.pts++
+						toPrint := []byte(usrName + " (" + getLevel(usrData.pts) + "): " + msg[i+1:])
+						dataLib[usrName] = usrData
+						for i := 0; i < activePortNum; i++ {
+							if activePort[i] != client {
+								activePort[i].Write(toPrint)
+							} else {
+								activePort[i].Write([]byte("~@" + getLevel(usrData.pts) + ", Coins: " + strconv.Itoa(usrData.pts)))
+							}
+						}
 					}
 				}
 			}
@@ -177,9 +280,9 @@ func (server ChatServer) userHandler(client net.Conn) {
 					}
 					usrName := msg[0:k]
 					pwd := msg[k+1:]
-					usrpwd, ok := dataLib[usrName]
+					usrData, ok := dataLib[usrName]
 					if ok {
-						if pwd == usrpwd {
+						if pwd == usrData.pwd {
 							client.Write([]byte("Accept"))
 						} else {
 							client.Write([]byte("WrongPwd"))
@@ -200,12 +303,12 @@ func (server ChatServer) userHandler(client net.Conn) {
 					}
 				}
 				usrName := msg[0:k]
-				pwd := msg[k+1:]
+				usrPwd := msg[k+1:]
 				_, ok := dataLib[usrName]
 				if ok {
 					client.Write([]byte("UserExists"))
 				} else {
-					dataLib[usrName] = pwd;
+					dataLib[usrName] = userLib{pwd: usrPwd, pts: 0}
 					client.Write([]byte("Accept"))
 				}
 			}
@@ -237,11 +340,11 @@ func (server ChatServer) userHandler(client net.Conn) {
 				}
 				oldpwd := msg[0:k]
 				newpwd := msg[k+1:]
-				pwd, ok := dataLib[oldusrName]
+				usrData, ok := dataLib[oldusrName]
 				if ok == false {
 					client.Write([]byte("NoUser"))
 				} else {
-					if pwd != oldpwd {
+					if usrData.pwd != oldpwd {
 						client.Write([]byte("WrongPwd"))
 					} else {
 						_, ok2 := dataLib[newusrName]
@@ -249,7 +352,7 @@ func (server ChatServer) userHandler(client net.Conn) {
 							client.Write([]byte("UserExists"))
 						} else {
 							delete(dataLib, oldusrName)
-							dataLib[newusrName] = newpwd;
+							dataLib[newusrName] = userLib{pwd: newpwd, pts: usrData.pts}
 							for i := 0; i < activePortNum; i++ {
 								if activePort[i] != client {
 									activePort[i].Write([]byte("<" + oldusrName + "> change his/her name to <" + newusrName + ">."))
