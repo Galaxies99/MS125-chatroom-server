@@ -18,6 +18,7 @@ type userLib struct {
 var dataLib map[string]userLib
 var activePort []net.Conn
 var activePortNum int
+var TouristID int
 
 type ChatServer struct {
 	listenAddr string
@@ -36,10 +37,17 @@ func (server ChatServer) StartListen() {
 	//start listen on the address given
 	listener, err := net.Listen(LISTEN_TCP, server.listenAddr)
 	server.listener = listener
+	TouristID = 0
 
 	dataLib = make(map[string]userLib)
 	activePort = make([]net.Conn, 30000)
 	activePortNum = 0
+
+	// for test
+	dataLib["test1"] = userLib{"test", 0}
+	dataLib["test2"] = userLib{"test", 100}
+	dataLib["test3"] = userLib{"test", 1000}
+
 
 	//exit when server listen fail
 	if err != nil {
@@ -214,24 +222,27 @@ func (server ChatServer) userHandler(client net.Conn) {
 			if clientType == 1 {
 				if checkifUnlog(msg) {
 					msg = msg[8:]
-					if msg != "Tourist" {
-						toPrint := []byte("<" + msg + "> log out.")
-						for i := 0; i < activePortNum; i++ {
-							if activePort[i] != client {
-								activePort[i].Write(toPrint)
-							}
+					toPrint := "<" + msg + "> log out."
+					for i := 0; i < activePortNum; i++ {
+						if activePort[i] != client {
+							activePort[i].Write([]byte(toPrint))
 						}
 					}
 				} else if checkifLogin(msg) {
 					msg = msg[8:]
-					if msg != "Tourist" {
-						toPrint := []byte("<" + msg + "> log in.")
+					if len(msg) >= 7 && msg[0:7] == "Tourist" {
+						toPrint := "<" + msg + "> log in."
+						for i := 0; i < activePortNum; i++ {
+							activePort[i].Write([]byte(toPrint))
+						}
+					} else {
+						toPrint := "<" + msg + "> log in."
 						for i := 0; i < activePortNum; i++ {
 							if activePort[i] != client {
-								activePort[i].Write(toPrint)
+								activePort[i].Write([]byte(toPrint))
 							} else {
 								usrData := dataLib[msg]
-								activePort[i].Write([]byte("~@" + getLevel(usrData.pts) + ", Coins: " + strconv.Itoa(usrData.pts)))
+								activePort[i].Write([]byte("~@" + getLevel(usrData.pts) + ", Coins: " + strconv.Itoa(usrData.pts) + "#" + toPrint))
 							}
 						}
 					}
@@ -243,23 +254,22 @@ func (server ChatServer) userHandler(client net.Conn) {
 						}
 					}
 					usrName := msg[0:i]
-					if usrName == "Tourist" {
-						toPrint := []byte("Tourist: " + msg[i+1:])
+					if len(usrName) >= 7 && usrName[0:7] == "Tourist" {
+						toPrint := usrName + "  " + GetCurrentTimeString() + "#" + msg[i+1:]
 						for i := 0; i < activePortNum; i++ {
-							if activePort[i] != client {
-								activePort[i].Write(toPrint)
-							}
+							activePort[i].Write([]byte(toPrint))
 						}
 					} else {
 						usrData := dataLib[usrName]
 						usrData.pts++
-						toPrint := []byte(usrName + " (" + getLevel(usrData.pts) + "): " + msg[i+1:])
+						toPrint := usrName + " (" + getLevel(usrData.pts) + ") " + GetCurrentTimeString() + "#" + msg[i+1:]
 						dataLib[usrName] = usrData
 						for i := 0; i < activePortNum; i++ {
 							if activePort[i] != client {
-								activePort[i].Write(toPrint)
+								activePort[i].Write([]byte(toPrint))
 							} else {
-								activePort[i].Write([]byte("~@" + getLevel(usrData.pts) + ", Coins: " + strconv.Itoa(usrData.pts)))
+								tmp := "~@" + getLevel(usrData.pts) + ", Coins: " + strconv.Itoa(usrData.pts)
+								activePort[i].Write([]byte(tmp + "#" + toPrint))
 							}
 						}
 					}
@@ -269,7 +279,8 @@ func (server ChatServer) userHandler(client net.Conn) {
 			if clientType == 2 {
 				// login request.
 				if checkifTourist(msg) {
-					client.Write([]byte("Accept"))
+					TouristID ++
+					client.Write([]byte("Accept#" + "Tourist" + strconv.Itoa(TouristID)))
 				} else {
 					msg = msg[15:]
 					k := 0
