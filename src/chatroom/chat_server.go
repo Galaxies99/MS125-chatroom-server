@@ -13,11 +13,13 @@ const (
 type userLib struct {
 	pwd	string
 	pts int
+	blacklist map[string]bool
 }
 
 var dataLib map[string]userLib
 var activePort []net.Conn
 var activePortNum int
+var portName map[net.Addr]string
 var TouristID int
 
 type ChatServer struct {
@@ -42,12 +44,12 @@ func (server ChatServer) StartListen() {
 	dataLib = make(map[string]userLib)
 	activePort = make([]net.Conn, 30000)
 	activePortNum = 0
+	portName = make(map[net.Addr]string)
 
 	// for test
-	dataLib["test1"] = userLib{"test", 0}
-	dataLib["test2"] = userLib{"test", 100}
-	dataLib["test3"] = userLib{"test", 1000}
-
+	dataLib["test1"] = userLib{"test", 0, make(map[string]bool)}
+	dataLib["test2"] = userLib{"test", 100, make(map[string]bool)}
+	dataLib["test3"] = userLib{"test", 1000, make(map[string]bool)}
 
 	//exit when server listen fail
 	if err != nil {
@@ -112,6 +114,28 @@ func checkifChange(msg string) (bool) {
 	}
 }
 
+func checkifBlack(msg string) (bool) {
+	if len(msg) < 12 {
+		return false
+	}
+	if msg[0:12] == "~@BlackList#" {
+		return true
+	} else {
+		return false
+	}
+}
+
+func checkifWhite(msg string) (bool) {
+	if len(msg) < 12 {
+		return false
+	}
+	if msg[0:12] == "~@WhiteList#" {
+		return true
+	} else {
+		return false
+	}
+}
+
 func checkifUnlog(msg string) (bool) {
 	if len(msg) < 8 {
 		return false
@@ -166,7 +190,7 @@ func getLevel(pts int) (string) {
 }
 
 func (server ChatServer) userHandler(client net.Conn) {
-	buffer := make([]byte, 1024)
+	buffer := make([]byte, 20000000)
 	clientAddr := client.RemoteAddr()
 	clientType := -1
 	PrintClientMsg(PING_MSG + clientAddr.String())
@@ -194,38 +218,59 @@ func (server ChatServer) userHandler(client net.Conn) {
 				// check type
 				if checkifLoginRequest(msg) {
 					clientType = 2
+				} else if checkifRegister(msg) {
+					clientType = 3
+				} else if checkifChange(msg) {
+					clientType = 4
+				} else if checkifWhite(msg) || checkifBlack(msg) {
+					clientType = 5;
 				} else {
-					if checkifRegister(msg) {
-						clientType = 3
-					} else {
-						if checkifChange(msg) {
-							clientType = 4
-						} else {
-							clientType = 1
-
-							found := false
-							for i := 0; i < activePortNum; i++ {
-								if activePort[i] == client {
-									found = true
-									break
-								}
-							}
-							if found == false {
-								activePort[activePortNum] = client
-								activePortNum ++
-							}
+					clientType = 1
+					found := false
+					for i := 0; i < activePortNum; i++ {
+						if activePort[i] == client {
+							found = true
+							break
 						}
+					}
+					if found == false {
+						activePort[activePortNum] = client
+						activePortNum++
 					}
 				}
 			}
+
 
 			if clientType == 1 {
 				if checkifUnlog(msg) {
 					msg = msg[8:]
 					toPrint := "<" + msg + "> log out."
-					for i := 0; i < activePortNum; i++ {
-						if activePort[i] != client {
-							activePort[i].Write([]byte(toPrint))
+					if len(msg) >= 7 && msg[0:7] == "Tourist" {
+						for i := 0; i < activePortNum; i++ {
+							usr, isnotTourist := portName[activePort[i].RemoteAddr()]
+							if isnotTourist == false {
+								activePort[i].Write([]byte(toPrint))
+							} else {
+								_, isinblackList := dataLib[usr].blacklist["Tourist"]
+								if isinblackList == false {
+									activePort[i].Write([]byte(toPrint))
+								}
+							}
+						}
+					} else {
+						delete(portName, clientAddr);
+						for i := 0; i < activePortNum; i++ {
+							if activePort[i] != client {
+								usr, isnotTourist := portName[activePort[i].RemoteAddr()]
+								if isnotTourist == false {
+									activePort[i].Write([]byte(toPrint))
+								} else {
+									_, isinblackList := dataLib[usr].blacklist[msg]
+									if isinblackList == false {
+										activePort[i].Write([]byte(toPrint))
+									}
+								}
+							}
 						}
 					}
 				} else if checkifLogin(msg) {
@@ -233,13 +278,30 @@ func (server ChatServer) userHandler(client net.Conn) {
 					if len(msg) >= 7 && msg[0:7] == "Tourist" {
 						toPrint := "<" + msg + "> log in."
 						for i := 0; i < activePortNum; i++ {
-							activePort[i].Write([]byte(toPrint))
+							usr, isnotTourist := portName[activePort[i].RemoteAddr()]
+							if isnotTourist == false {
+								activePort[i].Write([]byte(toPrint))
+							} else {
+								_, isinblackList := dataLib[usr].blacklist["Tourist"]
+								if isinblackList == false {
+									activePort[i].Write([]byte(toPrint))
+								}
+							}
 						}
 					} else {
 						toPrint := "<" + msg + "> log in."
+						portName[clientAddr] = msg
 						for i := 0; i < activePortNum; i++ {
 							if activePort[i] != client {
-								activePort[i].Write([]byte(toPrint))
+								usr, isnotTourist := portName[activePort[i].RemoteAddr()]
+								if isnotTourist == false {
+									activePort[i].Write([]byte(toPrint))
+								} else {
+									_, isinblackList := dataLib[usr].blacklist[msg]
+									if isinblackList == false {
+										activePort[i].Write([]byte(toPrint))
+									}
+								}
 							} else {
 								usrData := dataLib[msg]
 								activePort[i].Write([]byte("~@" + getLevel(usrData.pts) + ", Coins: " + strconv.Itoa(usrData.pts) + "#" + toPrint))
@@ -257,7 +319,15 @@ func (server ChatServer) userHandler(client net.Conn) {
 					if len(usrName) >= 7 && usrName[0:7] == "Tourist" {
 						toPrint := usrName + "  " + GetCurrentTimeString() + "#" + msg[i+1:]
 						for i := 0; i < activePortNum; i++ {
-							activePort[i].Write([]byte(toPrint))
+							usr, isnotTourist := portName[activePort[i].RemoteAddr()]
+							if isnotTourist == false {
+								activePort[i].Write([]byte(toPrint))
+							} else {
+								_, isinblackList := dataLib[usr].blacklist["Tourist"]
+								if isinblackList == false {
+									activePort[i].Write([]byte(toPrint))
+								}
+							}
 						}
 					} else {
 						usrData := dataLib[usrName]
@@ -266,7 +336,15 @@ func (server ChatServer) userHandler(client net.Conn) {
 						dataLib[usrName] = usrData
 						for i := 0; i < activePortNum; i++ {
 							if activePort[i] != client {
-								activePort[i].Write([]byte(toPrint))
+								usr, isnotTourist := portName[activePort[i].RemoteAddr()]
+								if isnotTourist == false {
+									activePort[i].Write([]byte(toPrint))
+								} else {
+									_, isinblackList := dataLib[usr].blacklist[usrName]
+									if isinblackList == false {
+										activePort[i].Write([]byte(toPrint))
+									}
+								}
 							} else {
 								tmp := "~@" + getLevel(usrData.pts) + ", Coins: " + strconv.Itoa(usrData.pts)
 								activePort[i].Write([]byte(tmp + "#" + toPrint))
@@ -319,7 +397,7 @@ func (server ChatServer) userHandler(client net.Conn) {
 				if ok {
 					client.Write([]byte("UserExists"))
 				} else {
-					dataLib[usrName] = userLib{pwd: usrPwd, pts: 0}
+					dataLib[usrName] = userLib{usrPwd, 0, make(map[string]bool)}
 					client.Write([]byte("Accept"))
 				}
 			}
@@ -363,7 +441,7 @@ func (server ChatServer) userHandler(client net.Conn) {
 							client.Write([]byte("UserExists"))
 						} else {
 							delete(dataLib, oldusrName)
-							dataLib[newusrName] = userLib{pwd: newpwd, pts: usrData.pts}
+							dataLib[newusrName] = userLib{newpwd, usrData.pts, usrData.blacklist}
 							for i := 0; i < activePortNum; i++ {
 								if activePort[i] != client {
 									activePort[i].Write([]byte("<" + oldusrName + "> change his/her name to <" + newusrName + ">."))
@@ -371,6 +449,48 @@ func (server ChatServer) userHandler(client net.Conn) {
 							}
 							client.Write([]byte("Accept"))
 						}
+					}
+				}
+			}
+
+			if clientType == 5 {
+				if checkifBlack(msg) {
+					msg = msg[12:]
+					i := 0
+					for ; i < len(msg); i++ {
+						if msg[i] == '#' {
+							break
+						}
+					}
+					usr := msg[:i]
+					black := msg[i+1:]
+					_, ok := dataLib[black]
+					usrData := dataLib[usr]
+					if ok == false && black != "Tourist" {
+						client.Write([]byte("NoUserBlack"));
+					} else {
+						usrData.blacklist[black] = true
+						dataLib[usr] = usrData
+						client.Write([]byte("AcceptBlack"));
+					}
+				} else {
+					msg = msg[12:]
+					i := 0
+					for ; i < len(msg); i++ {
+						if msg[i] == '#' {
+							break
+						}
+					}
+					usr := msg[:i]
+					white := msg[i+1:]
+					usrData := dataLib[usr]
+					_, ok := usrData.blacklist[white]
+					if ok == false {
+						client.Write([]byte("NoUserWhite"));
+					} else {
+						delete(usrData.blacklist, white)
+						dataLib[usr] = usrData
+						client.Write([]byte("AcceptWhite"));
 					}
 				}
 			}

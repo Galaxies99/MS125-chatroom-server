@@ -10,5 +10,5 @@ go run main.go
 
 即可开启 Server，配套 Client 即可实现 ChatRoom 功能。
 
-版本 v1.0
+版本 v3.0
 
